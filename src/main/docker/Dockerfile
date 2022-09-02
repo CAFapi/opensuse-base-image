@@ -14,15 +14,8 @@
 # limitations under the License.
 #
 
-# Docker registry
 ARG DOCKER_HUB_PUBLIC=docker.io
-
-#
-# Stage 1: The start of the actual image definition
-# - Install desired packages
-# - Specify policy for cryptographic back-ends
-#
-FROM ${DOCKER_HUB_PUBLIC}/opensuse/leap:latest AS stage1
+FROM ${DOCKER_HUB_PUBLIC}/opensuse/leap:latest
 
 # Set the locale manually to a set inherited from the base image (defaults to POSIX)
 ENV LANG=en_US.utf8
@@ -30,40 +23,24 @@ ENV LANG=en_US.utf8
 # Copy custom crypto-policy file
 COPY DISABLE-CBC.pmod /etc/crypto-policies/policies/modules
 
+# Copy in the home:alvistack public key
+COPY home_alvistack_repo_key.pub .
+
 # Update the OS packages, install cURL, postgreSQL client and dejavu-fonts
 # Install crypto-policies-scripts and disable weaker security algorithms
 RUN zypper -n refresh && \
     zypper -n update && \
-    zypper -n install curl postgresql dejavu-fonts crypto-policies-scripts && \
+    zypper addrepo https://download.opensuse.org/repositories/home:alvistack/openSUSE_Leap_15.4/home:alvistack.repo && \
+    rpmkeys --import home_alvistack_repo_key.pub && \
+    rm home_alvistack_repo_key.pub && \
+    zypper -n refresh && \
+    zypper -n install curl postgresql dejavu-fonts crypto-policies-scripts gosu && \
     update-crypto-policies --set DEFAULT:DISABLE-CBC && \
     sed -rie '/^jdk.tls.disabledAlgorithms=/s/$/, TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256/' \
         /etc/crypto-policies/back-ends/java.config && \
     zypper -n remove -u crypto-policies-scripts && \
+    zypper removerepo home_alvistack && \
     zypper -n clean --all
-
-#
-# Stage 2: Download and verify gosu
-#
-FROM stage1 AS stage2
-
-# Install dirmngr to enable gosu verification
-RUN zypper -n install dirmngr
-
-# Download and verify gosu
-RUN gpg --batch --keyserver-options http-proxy=${env.HTTP_PROXY} --keyserver hkps://keys.openpgp.org \
-        --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 && \
-    curl -o /usr/local/bin/gosu -SL "https://github.com/tianon/gosu/releases/download/1.14/gosu-amd64" && \
-    curl -o /usr/local/bin/gosu.asc -SL "https://github.com/tianon/gosu/releases/download/1.14/gosu-amd64.asc" && \
-    gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu && \
-    chmod +x /usr/local/bin/gosu
-
-#
-# Stage 3: The remainder of the actual image definition
-#
-FROM stage1
-
-# Copy gosu
-COPY --from=stage2 /usr/local/bin/gosu /usr/local/bin/gosu
 
 # Add scripts to be executed during startup
 COPY startup /startup
